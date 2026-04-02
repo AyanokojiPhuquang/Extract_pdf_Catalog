@@ -219,4 +219,12 @@ async def extract(request: Request):
         log.info("Extraction complete!")
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+        },
+    )
