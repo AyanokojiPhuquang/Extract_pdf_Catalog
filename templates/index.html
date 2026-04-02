@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Product Extractor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; }
+        .header { background: #1a73e8; color: white; padding: 16px 24px; font-size: 20px; font-weight: 600; }
+        .container { display: flex; height: calc(100vh - 56px); }
+        .left-panel { width: 50%; border-right: 1px solid #ddd; display: flex; flex-direction: column; background: #fff; }
+        .right-panel { width: 50%; display: flex; flex-direction: column; background: #fff; }
+        .upload-area { padding: 20px; border-bottom: 1px solid #eee; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .btn { border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-primary { background: #1a73e8; color: white; }
+        .btn-primary:hover:not(:disabled) { background: #1557b0; }
+        .btn-green { background: #34a853; color: white; }
+        .btn-green:hover:not(:disabled) { background: #2d8e47; }
+        .btn-orange { background: #ff9800; color: white; font-size: 13px; padding: 8px 16px; margin-left: auto; }
+        .btn-orange:hover { background: #e68900; }
+        .file-info { font-size: 13px; color: #666; }
+        .pdf-viewer { flex: 1; overflow: hidden; }
+        .pdf-viewer iframe { width: 100%; height: 100%; border: none; }
+        .placeholder { display: flex; align-items: center; justify-content: center; height: 100%; color: #999; font-size: 16px; flex-direction: column; gap: 8px; }
+        .extract-bar { padding: 16px 20px; border-bottom: 1px solid #eee; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .extract-bar label { font-size: 13px; color: #555; }
+        .extract-bar input[type="number"] { width: 70px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+        .result-area { flex: 1; overflow: auto; padding: 0; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { background: #f8f9fa; position: sticky; top: 0; z-index: 1; }
+        th, td { padding: 8px 12px; border: 1px solid #e0e0e0; text-align: left; white-space: nowrap; }
+        tr:hover td { background: #f5f8ff; }
+        .stats { padding: 8px 20px; background: #f8f9fa; border-top: 1px solid #eee; font-size: 12px; color: #666; }
+        .progress-bar { height: 4px; background: #e0e0e0; border-radius: 2px; overflow: hidden; }
+        .progress-fill { height: 100%; background: #1a73e8; transition: width 0.3s; }
+        .progress-text { font-size: 12px; color: #666; margin-top: 4px; }
+        .batch-error { color: #d93025; font-size: 12px; padding: 4px 12px; }
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #ccc; border-top-color: #1a73e8; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="header">📄 PDF Product Extractor</div>
+    <div class="container">
+        <div class="left-panel">
+            <div class="upload-area">
+                <input type="file" id="fileInput" accept=".pdf" hidden>
+                <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📁 Upload PDF</button>
+                <span class="file-info" id="fileInfo">Chưa có file nào</span>
+            </div>
+            <div class="pdf-viewer" id="pdfViewer">
+                <div class="placeholder">Upload file PDF để xem tại đây</div>
+            </div>
+        </div>
+        <div class="right-panel">
+            <div class="extract-bar">
+                <label>Từ trang:</label>
+                <input type="number" id="startPage" value="1" min="1">
+                <label>Đến trang:</label>
+                <input type="number" id="endPage" value="10" min="1">
+                <button class="btn btn-green" id="extractBtn" onclick="startExtract()" disabled>🔍 Trích xuất</button>
+                <button class="btn btn-orange" id="downloadBtn" onclick="downloadCSV()" style="display:none">⬇ Tải CSV</button>
+            </div>
+            <div id="progressArea" style="padding: 8px 20px; display: none;">
+                <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+                <div class="progress-text" id="progressText"></div>
+            </div>
+            <div class="result-area" id="resultArea">
+                <div class="placeholder">Kết quả trích xuất sẽ hiển thị tại đây</div>
+            </div>
+            <div class="stats" id="stats"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentFileId = null;
+        let allRows = [];
+        let headers = [];
+        let totalPages = 0;
+
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const info = document.getElementById('fileInfo');
+            info.textContent = `Đang upload ${file.name}...`;
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const resp = await fetch('/upload', { method: 'POST', body: formData });
+                const data = await resp.json();
+                currentFileId = data.file_id;
+                totalPages = data.total_pages;
+                info.textContent = `${data.filename} — ${data.total_pages} trang`;
+                document.getElementById('endPage').value = data.total_pages;
+                document.getElementById('endPage').max = data.total_pages;
+                document.getElementById('startPage').max = data.total_pages;
+                document.getElementById('extractBtn').disabled = false;
+                document.getElementById('pdfViewer').innerHTML = `<iframe src="${data.pdf_url}"></iframe>`;
+            } catch (err) {
+                info.textContent = 'Upload thất bại: ' + err.message;
+            }
+        });
+
+        function startExtract() {
+            if (!currentFileId) return;
+            const startPage = parseInt(document.getElementById('startPage').value) - 1;
+            const endPage = parseInt(document.getElementById('endPage').value);
+            const btn = document.getElementById('extractBtn');
+            const area = document.getElementById('resultArea');
+            const stats = document.getElementById('stats');
+            const progressArea = document.getElementById('progressArea');
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Đang xử lý...';
+            allRows = [];
+            headers = [];
+            document.getElementById('downloadBtn').style.display = 'none';
+            stats.textContent = '';
+
+            // Init table
+            area.innerHTML = '<table id="resultTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>';
+            progressArea.style.display = 'block';
+            document.getElementById('progressFill').style.width = '0%';
+            document.getElementById('progressText').textContent = 'Bắt đầu xử lý...';
+
+            const url = `/extract?file_id=${currentFileId}&start_page=${startPage}&end_page=${endPage}`;
+            const evtSource = new EventSource(url);
+
+            evtSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'progress') {
+                    const pct = Math.round((data.batch - 1) / data.total_batches * 100);
+                    document.getElementById('progressFill').style.width = pct + '%';
+                    document.getElementById('progressText').innerHTML =
+                        `<span class="spinner"></span> Batch ${data.batch}/${data.total_batches} — Trang ${data.pages}`;
+                }
+                else if (data.type === 'batch') {
+                    // Set headers once
+                    if (!headers.length && data.headers.length) {
+                        headers = data.headers;
+                        const head = document.getElementById('tableHead');
+                        head.innerHTML = '<th>#</th>' + headers.map(h => `<th>${h}</th>`).join('');
+                    }
+                    // Append rows
+                    const tbody = document.getElementById('tableBody');
+                    data.rows.forEach(row => {
+                        allRows.push(row);
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `<td>${allRows.length}</td>` + row.map(c => `<td>${c}</td>`).join('');
+                        tbody.appendChild(tr);
+                    });
+                    const pct = Math.round(data.batch / (data.batch + 1) * 100);
+                    stats.textContent = `📊 ${allRows.length} sản phẩm đã trích xuất...`;
+                }
+                else if (data.type === 'error') {
+                    const area = document.getElementById('progressText');
+                    area.innerHTML += `<div class="batch-error">⚠ Batch ${data.batch} (trang ${data.pages}): ${data.message}</div>`;
+                }
+                else if (data.type === 'done') {
+                    evtSource.close();
+                    document.getElementById('progressFill').style.width = '100%';
+                    document.getElementById('progressText').textContent = 'Hoàn tất!';
+                    stats.textContent = `✅ ${allRows.length} sản phẩm đã trích xuất`;
+                    btn.disabled = false;
+                    btn.innerHTML = '🔍 Trích xuất';
+                    if (allRows.length > 0) {
+                        document.getElementById('downloadBtn').style.display = 'inline-block';
+                    }
+                }
+            };
+
+            evtSource.onerror = () => {
+                evtSource.close();
+                document.getElementById('progressText').textContent = 'Kết nối bị gián đoạn';
+                btn.disabled = false;
+                btn.innerHTML = '🔍 Trích xuất';
+            };
+        }
+
+        function downloadCSV() {
+            if (!allRows.length) return;
+            let csv = headers.join(',') + '\n';
+            allRows.forEach(row => { csv += row.join(',') + '\n'; });
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'products.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
