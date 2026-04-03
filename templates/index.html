@@ -87,6 +87,13 @@
                     <input type="number" id="startPage" value="1" min="1">
                     <label>Đến trang:</label>
                     <input type="number" id="endPage" value="10" min="1">
+                    <label>Batch:</label>
+                    <select id="batchSize">
+                        <option value="5">5</option>
+                        <option value="10" selected>10</option>
+                        <option value="15">15</option>
+                        <option value="20">20</option>
+                    </select>
                     <label>Model:</label>
                     <span id="modelContainer">
                         <select id="modelSelect"><option value="">Đang tải...</option></select>
@@ -230,7 +237,8 @@
             document.getElementById('progressFill').style.width = '0%';
             document.getElementById('progressText').textContent = 'Bắt đầu xử lý...';
 
-            const url = `/extract?file_id=${currentFileId}&start_page=${startPage}&end_page=${endPage}&model=${encodeURIComponent(getSelectedModel())}&filename=${encodeURIComponent(currentFilename)}`;
+            const batchSize = parseInt(document.getElementById('batchSize').value) || 10;
+            const url = `/extract?file_id=${currentFileId}&start_page=${startPage}&end_page=${endPage}&batch_size=${batchSize}&model=${encodeURIComponent(getSelectedModel())}&filename=${encodeURIComponent(currentFilename)}`;
             const evtSource = new EventSource(url);
 
             evtSource.onmessage = (event) => {
