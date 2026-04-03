@@ -15,5 +15,8 @@ wheels/
 # Uploads
 uploads/*.pdf
 
+# Database
+data/data.db
+
 # UV
 uv.lock

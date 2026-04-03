@@ -11,6 +11,20 @@ log = logging.getLogger("extractor")
 
 CACHE_TTL = 3600  # 1 hour
 
+# Top vision models for PDF/catalogue extraction
+TOP_MODEL_IDS = {
+    "anthropic/claude-sonnet-4",
+    "anthropic/claude-opus-4",
+    "google/gemini-2.5-pro-preview",
+    "google/gemini-2.5-flash-preview",
+    "google/gemini-2.0-flash-001",
+    "openai/gpt-4.1",
+    "openai/gpt-4.1-mini",
+    "openai/gpt-4o",
+    "openai/o4-mini",
+    "meta-llama/llama-4-maverick",
+}
+
 
 @dataclass
 class ModelInfo:
@@ -68,4 +82,10 @@ class ModelCache:
             )
 
         log.info(f"Found {len(models)} vision-capable models")
-        return models
+        # Filter to top models only
+        top = [m for m in models if m.id in TOP_MODEL_IDS]
+        # Sort: keep a consistent order based on TOP_MODEL_IDS list
+        order = {mid: i for i, mid in enumerate(TOP_MODEL_IDS)}
+        top.sort(key=lambda m: order.get(m.id, 999))
+        log.info(f"Returning {len(top)} curated models")
+        return top
