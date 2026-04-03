@@ -27,6 +27,8 @@
         .extract-bar { padding: 16px 20px; border-bottom: 1px solid #eee; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
         .extract-bar label { font-size: 13px; color: #555; }
         .extract-bar input[type="number"] { width: 70px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+        .extract-bar select, .extract-bar input[type="text"] { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; max-width: 260px; }
+        .model-error { color: #d93025; font-size: 11px; }
         .result-area { flex: 1; overflow: auto; padding: 0; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th { background: #f8f9fa; position: sticky; top: 0; z-index: 1; }
@@ -39,6 +41,26 @@
         .batch-error { color: #d93025; font-size: 12px; padding: 4px 12px; }
         .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #ccc; border-top-color: #1a73e8; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; }
         @keyframes spin { to { transform: rotate(360deg); } }
+        .cost-display { font-size: 12px; color: #555; margin-top: 4px; }
+        .cost-display .cost-value { font-weight: 600; color: #1a73e8; }
+        .cost-display .cost-unknown { color: #999; font-style: italic; }
+        .tab-bar { display: flex; border-bottom: 2px solid #e0e0e0; background: #f8f9fa; }
+        .tab-btn { padding: 10px 24px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; background: none; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.2s, border-color 0.2s; }
+        .tab-btn:hover { color: #1a73e8; }
+        .tab-btn.active { color: #1a73e8; border-bottom-color: #1a73e8; }
+        .tab-content { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+        .tab-content.active { display: flex; }
+        .history-list { flex: 1; overflow-y: auto; padding: 12px 16px; }
+        .history-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: #999; font-size: 14px; }
+        .history-item { padding: 12px 14px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+        .history-item:hover { background: #f5f8ff; border-color: #1a73e8; }
+        .history-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+        .history-item-filename { font-weight: 600; font-size: 13px; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+        .history-item-time { font-size: 11px; color: #999; }
+        .history-item-meta { display: flex; gap: 12px; font-size: 12px; color: #666; align-items: center; flex-wrap: wrap; }
+        .history-item-meta span { display: inline-flex; align-items: center; gap: 3px; }
+        .history-csv-btn { background: #ff9800; color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: auto; white-space: nowrap; }
+        .history-csv-btn:hover { background: #e68900; }
     </style>
 </head>
 <body>
@@ -55,30 +77,107 @@
             </div>
         </div>
         <div class="right-panel">
-            <div class="extract-bar">
-                <label>Từ trang:</label>
-                <input type="number" id="startPage" value="1" min="1">
-                <label>Đến trang:</label>
-                <input type="number" id="endPage" value="10" min="1">
-                <button class="btn btn-green" id="extractBtn" onclick="startExtract()" disabled>🔍 Trích xuất</button>
-                <button class="btn btn-orange" id="downloadBtn" onclick="downloadCSV()" style="display:none">⬇ Tải CSV</button>
+            <div class="tab-bar">
+                <button class="tab-btn active" onclick="switchTab('extract')">🔍 Trích xuất</button>
+                <button class="tab-btn" onclick="switchTab('history')">📋 Lịch sử</button>
             </div>
-            <div id="progressArea" style="padding: 8px 20px; display: none;">
-                <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
-                <div class="progress-text" id="progressText"></div>
+            <div id="tabExtract" class="tab-content active">
+                <div class="extract-bar">
+                    <label>Từ trang:</label>
+                    <input type="number" id="startPage" value="1" min="1">
+                    <label>Đến trang:</label>
+                    <input type="number" id="endPage" value="10" min="1">
+                    <label>Model:</label>
+                    <span id="modelContainer">
+                        <select id="modelSelect"><option value="">Đang tải...</option></select>
+                    </span>
+                    <button class="btn btn-green" id="extractBtn" onclick="startExtract()" disabled>🔍 Trích xuất</button>
+                    <button class="btn btn-orange" id="downloadBtn" onclick="downloadCSV()" style="display:none">⬇ Tải CSV</button>
+                </div>
+                <div id="progressArea" style="padding: 8px 20px; display: none;">
+                    <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+                    <div class="progress-text" id="progressText"></div>
+                    <div class="cost-display" id="costDisplay" style="display: none;">
+                        💰 Chi phí: <span class="cost-value" id="costValue">$0.0000</span>
+                        <span id="costTokens" style="margin-left: 8px; color: #888;"></span>
+                    </div>
+                </div>
+                <div class="result-area" id="resultArea">
+                    <div class="placeholder">Kết quả trích xuất sẽ hiển thị tại đây</div>
+                </div>
+                <div class="stats" id="stats"></div>
             </div>
-            <div class="result-area" id="resultArea">
-                <div class="placeholder">Kết quả trích xuất sẽ hiển thị tại đây</div>
+            <div id="tabHistory" class="tab-content">
+                <div class="history-list" id="historyList">
+                    <div class="history-empty">Đang tải lịch sử...</div>
+                </div>
             </div>
-            <div class="stats" id="stats"></div>
         </div>
     </div>
 
     <script>
         let currentFileId = null;
+        let currentFilename = '';
         let allRows = [];
         let headers = [];
         let totalPages = 0;
+        let totalPromptTokens = 0;
+        let totalCompletionTokens = 0;
+        let totalCostUsd = 0;
+        let costKnown = false;
+
+        function formatCost(usd) {
+            var dollar = String.fromCharCode(36);
+            return dollar + usd.toFixed(4);
+        }
+
+        function updateCostDisplay(costUsd, promptTokens, completionTokens) {
+            const display = document.getElementById('costDisplay');
+            const value = document.getElementById('costValue');
+            const tokens = document.getElementById('costTokens');
+            display.style.display = 'block';
+            value.textContent = formatCost(costUsd);
+            value.className = 'cost-value';
+            tokens.textContent = `(${promptTokens.toLocaleString()} prompt + ${completionTokens.toLocaleString()} completion tokens)`;
+        }
+
+        function showCostUnknown() {
+            const display = document.getElementById('costDisplay');
+            const value = document.getElementById('costValue');
+            const tokens = document.getElementById('costTokens');
+            display.style.display = 'block';
+            value.textContent = 'Không xác định';
+            value.className = 'cost-value cost-unknown';
+            tokens.textContent = '';
+        }
+
+        async function loadModels() {
+            const container = document.getElementById('modelContainer');
+            try {
+                const resp = await fetch('/models');
+                if (!resp.ok) throw new Error('API error');
+                const models = await resp.json();
+                if (models.error) throw new Error(models.error);
+                const select = document.getElementById('modelSelect');
+                select.innerHTML = models.map(m =>
+                    `<option value="${m.id}">${m.name}</option>`
+                ).join('');
+            } catch (err) {
+                container.innerHTML =
+                    `<input type="text" id="modelInput" placeholder="vd: anthropic/claude-sonnet-4" value="anthropic/claude-sonnet-4">` +
+                    `<span class="model-error">⚠ Không tải được danh sách model</span>`;
+            }
+        }
+
+        function getSelectedModel() {
+            const select = document.getElementById('modelSelect');
+            if (select) return select.value;
+            const input = document.getElementById('modelInput');
+            if (input) return input.value.trim();
+            return '';
+        }
+
+        loadModels();
 
         document.getElementById('fileInput').addEventListener('change', async (e) => {
             const file = e.target.files[0];
@@ -91,6 +190,7 @@
                 const resp = await fetch('/upload', { method: 'POST', body: formData });
                 const data = await resp.json();
                 currentFileId = data.file_id;
+                currentFilename = data.filename;
                 totalPages = data.total_pages;
                 info.textContent = `${data.filename} — ${data.total_pages} trang`;
                 document.getElementById('endPage').value = data.total_pages;
@@ -116,7 +216,12 @@
             btn.innerHTML = '<span class="spinner"></span> Đang xử lý...';
             allRows = [];
             headers = [];
+            totalPromptTokens = 0;
+            totalCompletionTokens = 0;
+            totalCostUsd = 0;
+            costKnown = false;
             document.getElementById('downloadBtn').style.display = 'none';
+            document.getElementById('costDisplay').style.display = 'none';
             stats.textContent = '';
 
             // Init table
@@ -125,7 +230,7 @@
             document.getElementById('progressFill').style.width = '0%';
             document.getElementById('progressText').textContent = 'Bắt đầu xử lý...';
 
-            const url = `/extract?file_id=${currentFileId}&start_page=${startPage}&end_page=${endPage}`;
+            const url = `/extract?file_id=${currentFileId}&start_page=${startPage}&end_page=${endPage}&model=${encodeURIComponent(getSelectedModel())}&filename=${encodeURIComponent(currentFilename)}`;
             const evtSource = new EventSource(url);
 
             evtSource.onmessage = (event) => {
@@ -152,6 +257,16 @@
                         tr.innerHTML = `<td>${allRows.length}</td>` + row.map(c => `<td>${c}</td>`).join('');
                         tbody.appendChild(tr);
                     });
+                    // Update cost display
+                    if (data.cost) {
+                        totalPromptTokens += data.cost.prompt_tokens || 0;
+                        totalCompletionTokens += data.cost.completion_tokens || 0;
+                        totalCostUsd += data.cost.cost_usd || 0;
+                        costKnown = true;
+                        updateCostDisplay(totalCostUsd, totalPromptTokens, totalCompletionTokens);
+                    } else {
+                        showCostUnknown();
+                    }
                     const pct = Math.round(data.batch / (data.batch + 1) * 100);
                     stats.textContent = `📊 ${allRows.length} sản phẩm đã trích xuất...`;
                 }
@@ -163,12 +278,24 @@
                     evtSource.close();
                     document.getElementById('progressFill').style.width = '100%';
                     document.getElementById('progressText').textContent = 'Hoàn tất!';
+                    // Display final total cost
+                    if (data.total_cost) {
+                        updateCostDisplay(
+                            data.total_cost.total_cost_usd,
+                            data.total_cost.prompt_tokens,
+                            data.total_cost.completion_tokens
+                        );
+                    } else if (!costKnown) {
+                        showCostUnknown();
+                    }
                     stats.textContent = `✅ ${allRows.length} sản phẩm đã trích xuất`;
                     btn.disabled = false;
                     btn.innerHTML = '🔍 Trích xuất';
                     if (allRows.length > 0) {
                         document.getElementById('downloadBtn').style.display = 'inline-block';
                     }
+                    // Refresh history list if on history tab
+                    if (activeTab === 'history') loadHistory();
                 }
             };
 
@@ -191,6 +318,102 @@
             a.download = 'products.csv';
             a.click();
             URL.revokeObjectURL(url);
+        }
+
+        let activeTab = 'extract';
+
+        function switchTab(tab) {
+            activeTab = tab;
+            document.querySelectorAll('.tab-btn').forEach((btn, i) => {
+                btn.classList.toggle('active', (i === 0 && tab === 'extract') || (i === 1 && tab === 'history'));
+            });
+            document.getElementById('tabExtract').classList.toggle('active', tab === 'extract');
+            document.getElementById('tabHistory').classList.toggle('active', tab === 'history');
+            if (tab === 'history') loadHistory();
+        }
+
+        async function loadHistory() {
+            const list = document.getElementById('historyList');
+            try {
+                const resp = await fetch('/history');
+                if (!resp.ok) throw new Error('API error');
+                const records = await resp.json();
+                if (!records.length) {
+                    list.innerHTML = '<div class="history-empty">Chưa có lịch sử trích xuất nào</div>';
+                    return;
+                }
+                list.innerHTML = records.map(r => {
+                    const cost = r.total_cost != null ? formatCost(r.total_cost) : 'N/A';
+                    const time = r.created_at || '';
+                    return `<div class="history-item" onclick="loadHistoryRecord(${r.id})">
+                        <div class="history-item-header">
+                            <span class="history-item-filename" title="${escapeHtml(r.filename)}">${escapeHtml(r.filename)}</span>
+                            <span class="history-item-time">${escapeHtml(time)}</span>
+                        </div>
+                        <div class="history-item-meta">
+                            <span>📦 ${r.product_count} sản phẩm</span>
+                            <span>🤖 ${escapeHtml(r.model_name)}</span>
+                            <span>💰 ${cost}</span>
+                            <button class="history-csv-btn" onclick="event.stopPropagation(); downloadHistoryCSV(${r.id})">⬇ CSV</button>
+                        </div>
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                list.innerHTML = '<div class="history-empty">Không tải được lịch sử</div>';
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        async function loadHistoryRecord(id) {
+            try {
+                const resp = await fetch(`/history/${id}`);
+                if (!resp.ok) throw new Error('Not found');
+                const record = await resp.json();
+                // Switch to extract tab to show results
+                switchTab('extract');
+                // Parse csv_data and display in result table
+                const lines = record.csv_data.trim().split('\n');
+                if (!lines.length) return;
+                const csvHeaders = lines[0].split(',');
+                const csvRows = lines.slice(1).map(line => line.split(','));
+                // Update global state
+                headers = csvHeaders;
+                allRows = csvRows;
+                // Render table
+                const area = document.getElementById('resultArea');
+                area.innerHTML = '<table id="resultTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>';
+                const head = document.getElementById('tableHead');
+                head.innerHTML = '<th>#</th>' + csvHeaders.map(h => `<th>${h}</th>`).join('');
+                const tbody = document.getElementById('tableBody');
+                csvRows.forEach((row, i) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `<td>${i + 1}</td>` + row.map(c => `<td>${c}</td>`).join('');
+                    tbody.appendChild(tr);
+                });
+                // Update stats
+                const stats = document.getElementById('stats');
+                stats.textContent = `📋 ${csvRows.length} sản phẩm (từ lịch sử: ${escapeHtml(record.filename)})`;
+                // Show download button
+                document.getElementById('downloadBtn').style.display = allRows.length > 0 ? 'inline-block' : 'none';
+                // Hide progress area
+                document.getElementById('progressArea').style.display = 'none';
+                // Show cost if available
+                if (record.total_cost != null) {
+                    updateCostDisplay(record.total_cost, record.prompt_tokens || 0, record.completion_tokens || 0);
+                } else {
+                    document.getElementById('costDisplay').style.display = 'none';
+                }
+            } catch (err) {
+                alert('Không tải được bản ghi lịch sử');
+            }
+        }
+
+        function downloadHistoryCSV(id) {
+            window.open(`/history/${id}/csv`, '_blank');
         }
     </script>
 </body>

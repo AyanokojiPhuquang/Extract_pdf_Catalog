@@ -7,7 +7,9 @@ services:
       - .env
     volumes:
       - uploads:/app/uploads
+      - dbdata:/app/data
     restart: unless-stopped
 
 volumes:
   uploads:
+  dbdata:
