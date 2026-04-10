@@ -23,6 +23,9 @@ TOP_MODEL_IDS = {
     "openai/gpt-4o",
     "openai/o4-mini",
     "meta-llama/llama-4-maverick",
+    "google/gemma-3-27b-it:free",
+    "google/gemma-3n-e4b-it:free",
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
 }
 
 
@@ -66,16 +69,18 @@ class ModelCache:
 
         models: list[ModelInfo] = []
         for item in data.get("data", []):
+            model_id = item["id"]
+            # Include if in our curated list OR has vision capability
             architecture = item.get("architecture") or {}
             modality = architecture.get("modality", "")
-            if "image" not in modality:
+            if model_id not in TOP_MODEL_IDS and "image" not in modality:
                 continue
 
             pricing = item.get("pricing") or {}
             models.append(
                 ModelInfo(
-                    id=item["id"],
-                    name=item.get("name", item["id"]),
+                    id=model_id,
+                    name=item.get("name", model_id),
                     prompt_price=float(pricing.get("prompt", 0)),
                     completion_price=float(pricing.get("completion", 0)),
                 )

@@ -33,6 +33,8 @@
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th { background: #f8f9fa; position: sticky; top: 0; z-index: 1; }
         th, td { padding: 8px 12px; border: 1px solid #e0e0e0; text-align: left; white-space: nowrap; }
+        td { cursor: text; }
+        td[contenteditable="true"]:focus { background: #fff8e1; outline: 2px solid #1a73e8; }
         tr:hover td { background: #f5f8ff; }
         .stats { padding: 8px 20px; background: #f8f9fa; border-top: 1px solid #eee; font-size: 12px; color: #666; }
         .progress-bar { height: 4px; background: #e0e0e0; border-radius: 2px; overflow: hidden; }
@@ -59,8 +61,8 @@
         .history-item-time { font-size: 11px; color: #999; }
         .history-item-meta { display: flex; gap: 12px; font-size: 12px; color: #666; align-items: center; flex-wrap: wrap; }
         .history-item-meta span { display: inline-flex; align-items: center; gap: 3px; }
-        .history-csv-btn { background: #ff9800; color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: auto; white-space: nowrap; }
-        .history-csv-btn:hover { background: #e68900; }
+        .history-action-btn { background: #ff9800; color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: auto; white-space: nowrap; }
+        .history-action-btn:hover { background: #e68900; }
     </style>
 </head>
 <body>
@@ -99,7 +101,8 @@
                         <select id="modelSelect"><option value="">Đang tải...</option></select>
                     </span>
                     <button class="btn btn-green" id="extractBtn" onclick="startExtract()" disabled>🔍 Trích xuất</button>
-                    <button class="btn btn-orange" id="downloadBtn" onclick="downloadCSV()" style="display:none">⬇ Tải CSV</button>
+                    <button class="btn btn-orange" id="downloadBtn" onclick="downloadExcel()" style="display:none">⬇ Tải Excel</button>
+                    <button class="btn btn-primary" id="saveBtn" onclick="saveEdits()" style="display:none">💾 Lưu</button>
                 </div>
                 <div id="progressArea" style="padding: 8px 20px; display: none;">
                     <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
@@ -123,9 +126,11 @@
     </div>
 
     <script>
+        const FIELDS = ["ma_san_pham", "ma_phu_kien", "ten_san_pham", "hinh_anh", "mo_ta_tinh_nang", "kich_thuoc", "thuong_hieu", "danh_muc", "don_vi", "thue_vat", "gia_niem_yet", "gia_mua_vao", "gia_ban_ra"];
         let currentFileId = null;
         let currentFilename = '';
-        let allRows = [];
+        let currentRecordId = null;
+        let allRows = []; // array of arrays (each row = array of cell values)
         let headers = [];
         let totalPages = 0;
         let totalPromptTokens = 0;
@@ -133,29 +138,67 @@
         let totalCostUsd = 0;
         let costKnown = false;
 
-        function formatCost(usd) {
-            var dollar = String.fromCharCode(36);
-            return dollar + usd.toFixed(4);
-        }
+        function formatCost(usd) { return '$' + usd.toFixed(4); }
 
         function updateCostDisplay(costUsd, promptTokens, completionTokens) {
-            const display = document.getElementById('costDisplay');
-            const value = document.getElementById('costValue');
-            const tokens = document.getElementById('costTokens');
-            display.style.display = 'block';
-            value.textContent = formatCost(costUsd);
-            value.className = 'cost-value';
-            tokens.textContent = `(${promptTokens.toLocaleString()} prompt + ${completionTokens.toLocaleString()} completion tokens)`;
+            const d = document.getElementById('costDisplay');
+            const v = document.getElementById('costValue');
+            const t = document.getElementById('costTokens');
+            d.style.display = 'block';
+            v.textContent = formatCost(costUsd);
+            v.className = 'cost-value';
+            t.textContent = `(${promptTokens.toLocaleString()} prompt + ${completionTokens.toLocaleString()} completion tokens)`;
         }
 
         function showCostUnknown() {
-            const display = document.getElementById('costDisplay');
-            const value = document.getElementById('costValue');
-            const tokens = document.getElementById('costTokens');
-            display.style.display = 'block';
-            value.textContent = 'Không xác định';
-            value.className = 'cost-value cost-unknown';
-            tokens.textContent = '';
+            const d = document.getElementById('costDisplay');
+            d.style.display = 'block';
+            document.getElementById('costValue').textContent = 'Không xác định';
+            document.getElementById('costValue').className = 'cost-value cost-unknown';
+            document.getElementById('costTokens').textContent = '';
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        // Read table cells back into allRows
+        function syncTableToData() {
+            const tbody = document.getElementById('tableBody');
+            if (!tbody) return;
+            allRows = [];
+            tbody.querySelectorAll('tr').forEach(tr => {
+                const cells = tr.querySelectorAll('td[contenteditable]');
+                const row = [];
+                cells.forEach(td => row.push(td.textContent));
+                if (row.length) allRows.push(row);
+            });
+        }
+
+        // Convert current table data to JSON array of objects
+        function buildJsonFromTable() {
+            syncTableToData();
+            return allRows.map(row => {
+                const obj = {};
+                headers.forEach((h, i) => { obj[h] = row[i] || ''; });
+                return obj;
+            });
+        }
+
+        // Render products (array of row arrays) into the result table
+        function renderTable(hdrs, rows) {
+            headers = hdrs;
+            allRows = rows;
+            const area = document.getElementById('resultArea');
+            area.innerHTML = '<table id="resultTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>';
+            document.getElementById('tableHead').innerHTML = '<th>#</th>' + headers.map(h => `<th>${h}</th>`).join('');
+            const tbody = document.getElementById('tableBody');
+            rows.forEach((row, i) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${i + 1}</td>` + row.map((c, ci) => `<td contenteditable="true" data-row="${i}" data-col="${ci}">${escapeHtml(c)}</td>`).join('');
+                tbody.appendChild(tr);
+            });
         }
 
         async function loadModels() {
@@ -165,23 +208,17 @@
                 if (!resp.ok) throw new Error('API error');
                 const models = await resp.json();
                 if (models.error) throw new Error(models.error);
-                const select = document.getElementById('modelSelect');
-                select.innerHTML = models.map(m =>
-                    `<option value="${m.id}">${m.name}</option>`
-                ).join('');
+                document.getElementById('modelSelect').innerHTML = models.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
             } catch (err) {
-                container.innerHTML =
-                    `<input type="text" id="modelInput" placeholder="vd: anthropic/claude-sonnet-4" value="anthropic/claude-sonnet-4">` +
-                    `<span class="model-error">⚠ Không tải được danh sách model</span>`;
+                container.innerHTML = `<input type="text" id="modelInput" placeholder="anthropic/claude-sonnet-4" value="anthropic/claude-sonnet-4"><span class="model-error">⚠ Không tải được model</span>`;
             }
         }
 
         function getSelectedModel() {
-            const select = document.getElementById('modelSelect');
-            if (select) return select.value;
-            const input = document.getElementById('modelInput');
-            if (input) return input.value.trim();
-            return '';
+            const s = document.getElementById('modelSelect');
+            if (s) return s.value;
+            const i = document.getElementById('modelInput');
+            return i ? i.value.trim() : '';
         }
 
         loadModels();
@@ -191,10 +228,10 @@
             if (!file) return;
             const info = document.getElementById('fileInfo');
             info.textContent = `Đang upload ${file.name}...`;
-            const formData = new FormData();
-            formData.append('file', file);
+            const fd = new FormData();
+            fd.append('file', file);
             try {
-                const resp = await fetch('/upload', { method: 'POST', body: formData });
+                const resp = await fetch('/upload', { method: 'POST', body: fd });
                 const data = await resp.json();
                 currentFileId = data.file_id;
                 currentFilename = data.filename;
@@ -205,9 +242,7 @@
                 document.getElementById('startPage').max = data.total_pages;
                 document.getElementById('extractBtn').disabled = false;
                 document.getElementById('pdfViewer').innerHTML = `<iframe src="${data.pdf_url}"></iframe>`;
-            } catch (err) {
-                info.textContent = 'Upload thất bại: ' + err.message;
-            }
+            } catch (err) { info.textContent = 'Upload thất bại: ' + err.message; }
         });
 
         function startExtract() {
@@ -215,24 +250,19 @@
             const startPage = parseInt(document.getElementById('startPage').value) - 1;
             const endPage = parseInt(document.getElementById('endPage').value);
             const btn = document.getElementById('extractBtn');
-            const area = document.getElementById('resultArea');
             const stats = document.getElementById('stats');
             const progressArea = document.getElementById('progressArea');
 
             btn.disabled = true;
             btn.innerHTML = '<span class="spinner"></span> Đang xử lý...';
-            allRows = [];
-            headers = [];
-            totalPromptTokens = 0;
-            totalCompletionTokens = 0;
-            totalCostUsd = 0;
-            costKnown = false;
+            allRows = []; headers = [];
+            totalPromptTokens = 0; totalCompletionTokens = 0; totalCostUsd = 0; costKnown = false;
             document.getElementById('downloadBtn').style.display = 'none';
+            document.getElementById('saveBtn').style.display = 'none';
             document.getElementById('costDisplay').style.display = 'none';
             stats.textContent = '';
 
-            // Init table
-            area.innerHTML = '<table id="resultTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>';
+            document.getElementById('resultArea').innerHTML = '<table id="resultTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>';
             progressArea.style.display = 'block';
             document.getElementById('progressFill').style.width = '0%';
             document.getElementById('progressText').textContent = 'Bắt đầu xử lý...';
@@ -243,93 +273,90 @@
 
             evtSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
-
                 if (data.type === 'progress') {
-                    const pct = Math.round((data.batch - 1) / data.total_batches * 100);
-                    document.getElementById('progressFill').style.width = pct + '%';
-                    document.getElementById('progressText').innerHTML =
-                        `<span class="spinner"></span> Batch ${data.batch}/${data.total_batches} — Trang ${data.pages}`;
+                    document.getElementById('progressFill').style.width = Math.round((data.batch - 1) / data.total_batches * 100) + '%';
+                    document.getElementById('progressText').innerHTML = `<span class="spinner"></span> Batch ${data.batch}/${data.total_batches} — Trang ${data.pages}`;
                 }
                 else if (data.type === 'batch') {
-                    // Set headers once
                     if (!headers.length && data.headers.length) {
                         headers = data.headers;
-                        const head = document.getElementById('tableHead');
-                        head.innerHTML = '<th>#</th>' + headers.map(h => `<th>${h}</th>`).join('');
+                        document.getElementById('tableHead').innerHTML = '<th>#</th>' + headers.map(h => `<th>${h}</th>`).join('');
                     }
-                    // Append rows
                     const tbody = document.getElementById('tableBody');
                     data.rows.forEach(row => {
                         allRows.push(row);
                         const tr = document.createElement('tr');
-                        tr.innerHTML = `<td>${allRows.length}</td>` + row.map(c => `<td>${c}</td>`).join('');
+                        tr.innerHTML = `<td>${allRows.length}</td>` + row.map((c, ci) => `<td contenteditable="true" data-row="${allRows.length-1}" data-col="${ci}">${escapeHtml(c)}</td>`).join('');
                         tbody.appendChild(tr);
                     });
-                    // Update cost display
                     if (data.cost) {
                         totalPromptTokens += data.cost.prompt_tokens || 0;
                         totalCompletionTokens += data.cost.completion_tokens || 0;
                         totalCostUsd += data.cost.cost_usd || 0;
                         costKnown = true;
                         updateCostDisplay(totalCostUsd, totalPromptTokens, totalCompletionTokens);
-                    } else {
-                        showCostUnknown();
-                    }
-                    const pct = Math.round(data.batch / (data.batch + 1) * 100);
+                    } else { showCostUnknown(); }
                     stats.textContent = `📊 ${allRows.length} sản phẩm đã trích xuất...`;
                 }
                 else if (data.type === 'error') {
-                    const area = document.getElementById('progressText');
-                    area.innerHTML += `<div class="batch-error">⚠ Batch ${data.batch} (trang ${data.pages}): ${data.message}</div>`;
+                    document.getElementById('progressText').innerHTML += `<div class="batch-error">⚠ Batch ${data.batch} (trang ${data.pages}): ${data.message}</div>`;
                 }
                 else if (data.type === 'done') {
                     evtSource.close();
                     document.getElementById('progressFill').style.width = '100%';
                     document.getElementById('progressText').textContent = 'Hoàn tất!';
-                    // Display final total cost
-                    if (data.total_cost) {
-                        updateCostDisplay(
-                            data.total_cost.total_cost_usd,
-                            data.total_cost.prompt_tokens,
-                            data.total_cost.completion_tokens
-                        );
-                    } else if (!costKnown) {
-                        showCostUnknown();
-                    }
+                    if (data.total_cost) updateCostDisplay(data.total_cost.total_cost_usd, data.total_cost.prompt_tokens, data.total_cost.completion_tokens);
+                    else if (!costKnown) showCostUnknown();
                     stats.textContent = `✅ ${allRows.length} sản phẩm đã trích xuất`;
                     btn.disabled = false;
                     btn.innerHTML = '🔍 Trích xuất';
                     if (allRows.length > 0) {
                         document.getElementById('downloadBtn').style.display = 'inline-block';
+                        document.getElementById('saveBtn').style.display = 'inline-block';
                     }
-                    // Refresh history list if on history tab
+                    if (data.record_id) currentRecordId = data.record_id;
                     if (activeTab === 'history') loadHistory();
                 }
             };
-
-            evtSource.onerror = () => {
-                evtSource.close();
-                document.getElementById('progressText').textContent = 'Kết nối bị gián đoạn';
-                btn.disabled = false;
-                btn.innerHTML = '🔍 Trích xuất';
-            };
+            evtSource.onerror = () => { evtSource.close(); document.getElementById('progressText').textContent = 'Kết nối bị gián đoạn'; btn.disabled = false; btn.innerHTML = '🔍 Trích xuất'; };
         }
 
-        function downloadCSV() {
+        async function downloadExcel() {
             if (!allRows.length) return;
-            let csv = headers.join(',') + '\n';
-            allRows.forEach(row => { csv += row.join(',') + '\n'; });
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'products.csv';
-            a.click();
-            URL.revokeObjectURL(url);
+            const jsonData = JSON.stringify(buildJsonFromTable());
+            try {
+                const resp = await fetch('/download-excel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ json_data: jsonData, filename: currentFilename || 'extracted' })
+                });
+                if (!resp.ok) throw new Error('Download failed');
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = (currentFilename || 'extracted').replace(/\.[^.]+$/, '') + '_extracted.xlsx';
+                a.click();
+                URL.revokeObjectURL(url);
+            } catch (err) { alert('Tải Excel thất bại: ' + err.message); }
+        }
+
+        async function saveEdits() {
+            if (!currentRecordId) { alert('Không có bản ghi để lưu. Hãy trích xuất trước.'); return; }
+            const jsonData = JSON.stringify(buildJsonFromTable());
+            try {
+                const resp = await fetch(`/history/${currentRecordId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ json_data: jsonData })
+                });
+                if (!resp.ok) throw new Error('Save failed');
+                const result = await resp.json();
+                alert(`Lưu thành công! (${result.product_count} sản phẩm)`);
+            } catch (err) { alert('Lưu thất bại: ' + err.message); }
         }
 
         let activeTab = 'extract';
-
         function switchTab(tab) {
             activeTab = tab;
             document.querySelectorAll('.tab-btn').forEach((btn, i) => {
@@ -346,34 +373,24 @@
                 const resp = await fetch('/history');
                 if (!resp.ok) throw new Error('API error');
                 const records = await resp.json();
-                if (!records.length) {
-                    list.innerHTML = '<div class="history-empty">Chưa có lịch sử trích xuất nào</div>';
-                    return;
-                }
+                if (!records.length) { list.innerHTML = '<div class="history-empty">Chưa có lịch sử trích xuất nào</div>'; return; }
                 list.innerHTML = records.map(r => {
                     const cost = r.total_cost != null ? formatCost(r.total_cost) : 'N/A';
-                    const time = r.created_at || '';
                     return `<div class="history-item" onclick="loadHistoryRecord(${r.id})">
                         <div class="history-item-header">
                             <span class="history-item-filename" title="${escapeHtml(r.filename)}">${escapeHtml(r.filename)}</span>
-                            <span class="history-item-time">${escapeHtml(time)}</span>
+                            <span class="history-item-time">${escapeHtml(r.created_at || '')}</span>
                         </div>
                         <div class="history-item-meta">
                             <span>📦 ${r.product_count} sản phẩm</span>
                             <span>🤖 ${escapeHtml(r.model_name)}</span>
                             <span>💰 ${cost}</span>
-                            <button class="history-csv-btn" onclick="event.stopPropagation(); downloadHistoryCSV(${r.id})">⬇ CSV</button>
+                            <button class="history-action-btn" onclick="event.stopPropagation(); downloadHistoryExcel(${r.id})">⬇ Excel</button>
+                            <button class="history-action-btn" style="background:#d93025" onclick="event.stopPropagation(); deleteHistoryRecord(${r.id})">🗑 Xóa</button>
                         </div>
                     </div>`;
                 }).join('');
-            } catch (err) {
-                list.innerHTML = '<div class="history-empty">Không tải được lịch sử</div>';
-            }
-        }
-
-        function escapeHtml(str) {
-            if (!str) return '';
-            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            } catch (err) { list.innerHTML = '<div class="history-empty">Không tải được lịch sử</div>'; }
         }
 
         async function loadHistoryRecord(id) {
@@ -381,47 +398,36 @@
                 const resp = await fetch(`/history/${id}`);
                 if (!resp.ok) throw new Error('Not found');
                 const record = await resp.json();
-                // Switch to extract tab to show results
                 switchTab('extract');
-                // Parse csv_data and display in result table
-                const lines = record.csv_data.trim().split('\n');
-                if (!lines.length) return;
-                const csvHeaders = lines[0].split(',');
-                const csvRows = lines.slice(1).map(line => line.split(','));
-                // Update global state
-                headers = csvHeaders;
-                allRows = csvRows;
-                // Render table
-                const area = document.getElementById('resultArea');
-                area.innerHTML = '<table id="resultTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>';
-                const head = document.getElementById('tableHead');
-                head.innerHTML = '<th>#</th>' + csvHeaders.map(h => `<th>${h}</th>`).join('');
-                const tbody = document.getElementById('tableBody');
-                csvRows.forEach((row, i) => {
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `<td>${i + 1}</td>` + row.map(c => `<td>${c}</td>`).join('');
-                    tbody.appendChild(tr);
-                });
-                // Update stats
-                const stats = document.getElementById('stats');
-                stats.textContent = `📋 ${csvRows.length} sản phẩm (từ lịch sử: ${escapeHtml(record.filename)})`;
-                // Show download button
-                document.getElementById('downloadBtn').style.display = allRows.length > 0 ? 'inline-block' : 'none';
-                // Hide progress area
+
+                // Parse JSON data
+                let products = [];
+                try { products = JSON.parse(record.json_data); } catch(e) { products = []; }
+                if (!Array.isArray(products)) products = [];
+
+                const hdrs = FIELDS;
+                const rows = products.map(p => hdrs.map(h => String(p[h] || '')));
+                renderTable(hdrs, rows);
+
+                document.getElementById('stats').textContent = `📋 ${rows.length} sản phẩm (từ lịch sử: ${escapeHtml(record.filename)})`;
+                document.getElementById('downloadBtn').style.display = rows.length > 0 ? 'inline-block' : 'none';
+                document.getElementById('saveBtn').style.display = rows.length > 0 ? 'inline-block' : 'none';
+                currentRecordId = id;
                 document.getElementById('progressArea').style.display = 'none';
-                // Show cost if available
-                if (record.total_cost != null) {
-                    updateCostDisplay(record.total_cost, record.prompt_tokens || 0, record.completion_tokens || 0);
-                } else {
-                    document.getElementById('costDisplay').style.display = 'none';
-                }
-            } catch (err) {
-                alert('Không tải được bản ghi lịch sử');
-            }
+                if (record.total_cost != null) updateCostDisplay(record.total_cost, record.prompt_tokens || 0, record.completion_tokens || 0);
+                else document.getElementById('costDisplay').style.display = 'none';
+            } catch (err) { alert('Không tải được bản ghi lịch sử'); }
         }
 
-        function downloadHistoryCSV(id) {
-            window.open(`/history/${id}/csv`, '_blank');
+        function downloadHistoryExcel(id) { window.open(`/history/${id}/excel`, '_blank'); }
+
+        async function deleteHistoryRecord(id) {
+            if (!confirm('Bạn có chắc muốn xóa bản ghi này?')) return;
+            try {
+                const resp = await fetch(`/history/${id}`, { method: 'DELETE' });
+                if (!resp.ok) throw new Error('Delete failed');
+                loadHistory();
+            } catch (err) { alert('Xóa thất bại: ' + err.message); }
         }
     </script>
 </body>

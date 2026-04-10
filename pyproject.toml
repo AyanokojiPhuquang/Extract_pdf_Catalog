@@ -11,6 +11,7 @@ dependencies = [
     "python-multipart>=0.0.22",
     "requests>=2.33.1",
     "uvicorn>=0.42.0",
+    "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
