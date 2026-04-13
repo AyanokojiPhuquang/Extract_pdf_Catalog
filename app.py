@@ -74,11 +74,13 @@ Hãy xem tất cả các trang catalogue dưới đây và trích xuất TOÀN B
 - "gia_mua_vao": Để trống ""
 - "gia_ban_ra": Giá bán ra
 
-QUY TẮC QUAN TRỌNG VỀ NHIỀU MÃ SẢN PHẨM TRONG 1 HÌNH:
-- Nếu 1 hình ảnh/mục hiển thị NHIỀU mã sản phẩm khác nhau thì PHẢI tách thành các sản phẩm RIÊNG BIỆT, mỗi mã 1 dòng
-- Khi tách, TẤT CẢ các trường thông tin chung (ten_san_pham, mo_ta_tinh_nang, kich_thuoc, thuong_hieu, danh_muc...) PHẢI được COPY GIỐNG NHAU cho mọi sản phẩm được tách ra
-- Chỉ khác nhau ở ma_san_pham và giá tương ứng của từng mã
-- Giá niêm yết và giá bán ra phải thuộc về CÙNG 1 mã sản phẩm, không lấy giá của mã khác
+QUY TẮC QUAN TRỌNG VỀ MÃ SẢN PHẨM:
+- Mã sản phẩm có thể chứa ký tự đặc biệt như / () - # . Giữ nguyên mã, KHÔNG tách
+- Ví dụ: "AC-299VN/BKG" là 1 mã duy nhất, KHÔNG tách thành "AC-299VN" và "BKG"
+- Ví dụ: "AL-652V(GC)" là 1 mã duy nhất, KHÔNG tách phần trong ngoặc
+- CHỈ tách khi có NHIỀU mã sản phẩm HOÀN TOÀN KHÁC NHAU với GIÁ RIÊNG cho từng mã
+- Khi tách, TẤT CẢ các trường thông tin chung PHẢI được COPY GIỐNG NHAU cho mọi sản phẩm
+- Giá niêm yết và giá bán ra phải thuộc về CÙNG 1 mã sản phẩm
 
 Quy tắc về giá:
 - Nếu sản phẩm chỉ có 1 giá duy nhất -> đó là gia_niem_yet, để trống gia_ban_ra
@@ -383,7 +385,7 @@ async def extract(request: Request):
                         cost_info = {"prompt_tokens": batch_cost.prompt_tokens, "completion_tokens": batch_cost.completion_tokens, "cost_usd": batch_cost.cost_usd}
                         session_cost = accumulate_cost(session_cost, batch_cost)
 
-                rows = [[p[h] for h in HEADERS] for p in products]
+                rows = [[str(len(all_products) - len(products) + i + 1)] + [p[h] for h in HEADERS] for i, p in enumerate(products)]
                 yield f"data: {json.dumps({'type': 'batch', 'batch': batch_idx+1, 'headers': HEADERS, 'rows': rows, 'pages': f'{batch_start+1}-{batch_end}', 'cost': cost_info}, ensure_ascii=False)}\n\n"
                 log.info(f"Batch {batch_idx+1}: extracted {len(products)} products")
             except Exception as e:

@@ -339,9 +339,9 @@
                     data.rows.forEach(row => {
                         allRows.push(row);
                         const tr = document.createElement('tr');
-                        // First cell is STT (from data or auto-increment)
                         const stt = row[0] || allRows.length;
-                        tr.innerHTML = `<td>${stt}</td>` + row.slice(1).map((c, ci) => `<td contenteditable="true" data-row="${allRows.length-1}" data-col="${ci+1}">${escapeHtml(c)}</td>`).join('');
+                        const dataCells = row.slice(1);
+                        tr.innerHTML = `<td>${stt}</td>` + dataCells.map((c, ci) => `<td contenteditable="true" data-row="${allRows.length-1}" data-col="${ci}">${escapeHtml(c)}</td>`).join('');
                         tbody.appendChild(tr);
                     });
                     if (data.cost) {
