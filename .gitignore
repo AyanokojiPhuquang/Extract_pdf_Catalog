@@ -13,7 +13,7 @@ wheels/
 .env
 
 # Uploads
-uploads/*.pdf
+uploads/
 
 # Database
 data/data.db

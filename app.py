@@ -18,6 +18,7 @@ from starlette.responses import StreamingResponse
 
 from cost import calculate_batch_cost, accumulate_cost, SessionCost
 from db import init_db, get_history, get_record, save_record, update_record_json, delete_record, ExtractionRecord
+from excel_processor import read_excel_preview, classify_rows, build_descriptions_batch, build_output_rows, call_llm_text_batch, OUTPUT_HEADERS, RowType
 from models import ModelCache
 
 load_dotenv()
@@ -142,15 +143,30 @@ async def index(request: Request):
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
+    original_name = file.filename or ""
+    ext = Path(original_name).suffix.lower()
+    if ext not in (".pdf", ".xlsx"):
+        return JSONResponse({"error": "Chỉ chấp nhận file .pdf hoặc .xlsx"}, status_code=400)
+
     file_id = str(uuid.uuid4())[:8]
-    filepath = UPLOAD_DIR / f"{file_id}.pdf"
+    filepath = UPLOAD_DIR / f"{file_id}{ext}"
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
-    doc = fitz.open(str(filepath))
-    total_pages = len(doc)
-    doc.close()
-    return JSONResponse({"file_id": file_id, "filename": file.filename, "total_pages": total_pages, "pdf_url": f"/pdf/{file_id}"})
+
+    if ext == ".xlsx":
+        try:
+            preview = read_excel_preview(str(filepath))
+            row_count = preview["row_count"]
+        except Exception as e:
+            log.error(f"Failed to read Excel file: {e}")
+            return JSONResponse({"error": "File Excel không hợp lệ"}, status_code=400)
+        return JSONResponse({"file_id": file_id, "filename": original_name, "file_type": "xlsx", "row_count": row_count})
+    else:
+        doc = fitz.open(str(filepath))
+        total_pages = len(doc)
+        doc.close()
+        return JSONResponse({"file_id": file_id, "filename": original_name, "file_type": "pdf", "total_pages": total_pages, "pdf_url": f"/pdf/{file_id}"})
 
 @app.get("/pdf/{file_id}")
 async def serve_pdf(file_id: str):
@@ -158,6 +174,13 @@ async def serve_pdf(file_id: str):
     if not filepath.exists():
         return JSONResponse({"error": "File not found"}, status_code=404)
     return FileResponse(str(filepath), media_type="application/pdf")
+
+@app.get("/xlsx/{file_id}")
+async def serve_xlsx(file_id: str):
+    filepath = UPLOAD_DIR / f"{file_id}.xlsx"
+    if not filepath.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    return FileResponse(str(filepath), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 @app.get("/models")
 async def list_models():
@@ -169,6 +192,140 @@ async def list_models():
     except requests.RequestException as e:
         log.error(f"Failed to fetch models: {e}")
         return JSONResponse({"error": f"OpenRouter API unavailable: {str(e)}"}, status_code=502)
+
+@app.get("/excel-preview/{file_id}")
+async def excel_preview(file_id: str):
+    filepath = UPLOAD_DIR / f"{file_id}.xlsx"
+    if not filepath.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    try:
+        preview = read_excel_preview(str(filepath))
+        return JSONResponse(preview)
+    except Exception as e:
+        log.error(f"Failed to read Excel preview: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+EXCEL_LLM_BATCH_SIZE = 100
+
+@app.get("/extract-excel")
+async def extract_excel(request: Request):
+    file_id = request.query_params.get("file_id")
+    model = request.query_params.get("model") or MODEL
+    filename = request.query_params.get("filename", "")
+    start_row = int(request.query_params.get("start_row", 1))
+    end_row = int(request.query_params.get("end_row", 99999))
+    batch_size = int(request.query_params.get("batch_size", EXCEL_LLM_BATCH_SIZE))
+
+    filepath = UPLOAD_DIR / f"{file_id}.xlsx"
+    if not filepath.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    if not API_KEY:
+        return JSONResponse({"error": "OPENROUTER_API_KEY not set"}, status_code=500)
+
+    # Ensure models are cached for pricing
+    if not model_cache._models and API_KEY:
+        try:
+            model_cache.get_models(API_KEY)
+        except Exception:
+            pass
+    pricing = model_cache.get_model_pricing(model)
+    prompt_price = pricing.prompt_price if pricing else 0.0
+    completion_price = pricing.completion_price if pricing else 0.0
+
+    def event_stream():
+        session_cost = SessionCost(0, 0, 0.0)
+        all_products = []
+
+        try:
+            all_classified = classify_rows(str(filepath))
+            # Filter by row range (1-based, relative to data rows)
+            data_rows_only = [r for r in all_classified if r.row_type not in (RowType.CATEGORY, RowType.SKIP)]
+            # Keep categories for danh_muc propagation, filter products by index
+            product_index = 0
+            classified = []
+            for r in all_classified:
+                if r.row_type in (RowType.CATEGORY, RowType.SKIP):
+                    classified.append(r)
+                else:
+                    product_index += 1
+                    if start_row <= product_index <= end_row:
+                        classified.append(r)
+            desc_pairs = build_descriptions_batch(classified)
+        except Exception as e:
+            log.error(f"Excel classification error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'batch': 0, 'message': str(e)}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'record_id': None, 'total_cost': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_cost_usd': 0.0}})}\n\n"
+            return
+
+        batches = []
+        for i in range(0, len(desc_pairs), batch_size):
+            batches.append(desc_pairs[i:i + batch_size])
+
+        total_batches = max(len(batches), 1)
+        log.info(f"Starting Excel extraction: {len(classified)} rows, {len(desc_pairs)} descriptions, {total_batches} batches, model={model}")
+
+        llm_results: dict[int, dict] = {}
+
+        if not batches:
+            yield f"data: {json.dumps({'type': 'progress', 'batch': 1, 'total_batches': 1, 'descriptions': '0'})}\n\n"
+        else:
+            for batch_idx, batch_pairs in enumerate(batches):
+                desc_start = batch_idx * EXCEL_LLM_BATCH_SIZE + 1
+                desc_end = desc_start + len(batch_pairs) - 1
+                log.info(f"--- Batch {batch_idx+1}/{total_batches}: descriptions {desc_start}-{desc_end} ---")
+                yield f"data: {json.dumps({'type': 'progress', 'batch': batch_idx+1, 'total_batches': total_batches, 'descriptions': f'{desc_start}-{desc_end}'})}\n\n"
+
+                try:
+                    descriptions = [desc for _, desc in batch_pairs]
+                    row_indices = [idx for idx, _ in batch_pairs]
+
+                    results, usage = call_llm_text_batch(descriptions, model, API_KEY)
+
+                    for row_idx, result in zip(row_indices, results):
+                        llm_results[row_idx] = result
+
+                    cost_info = None
+                    if usage:
+                        batch_cost = calculate_batch_cost(usage, prompt_price, completion_price)
+                        if batch_cost:
+                            cost_info = {"prompt_tokens": batch_cost.prompt_tokens, "completion_tokens": batch_cost.completion_tokens, "cost_usd": batch_cost.cost_usd}
+                            session_cost = accumulate_cost(session_cost, batch_cost)
+
+                    # Send cost update only (no rows yet)
+                    yield f"data: {json.dumps({'type': 'batch', 'batch': batch_idx+1, 'headers': OUTPUT_HEADERS, 'rows': [], 'cost': cost_info}, ensure_ascii=False)}\n\n"
+
+                    log.info(f"Batch {batch_idx+1}: processed {len(descriptions)} descriptions")
+                except Exception as e:
+                    log.error(f"Batch {batch_idx+1} error: {e}")
+                    yield f"data: {json.dumps({'type': 'error', 'batch': batch_idx+1, 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+        # Build all output rows AFTER all LLM batches complete
+        output_rows = build_output_rows(classified, llm_results)
+        all_products = output_rows
+        rows = [[p.get('_stt', '')] + [p.get(h, '') for h in OUTPUT_HEADERS] for p in output_rows]
+        yield f"data: {json.dumps({'type': 'batch', 'batch': total_batches, 'headers': OUTPUT_HEADERS, 'rows': rows, 'cost': None}, ensure_ascii=False)}\n\n"
+
+        json_data = json.dumps(all_products, ensure_ascii=False)
+        record_id = None
+        try:
+            record = ExtractionRecord(
+                id=None, file_id=file_id, filename=filename or f"{file_id}.xlsx",
+                model_name=model, start_page=0, end_page=0,
+                product_count=len(all_products), json_data=json_data,
+                total_cost=session_cost.total_cost_usd if session_cost.total_cost_usd > 0 else None,
+                prompt_tokens=session_cost.total_prompt_tokens if session_cost.total_prompt_tokens > 0 else None,
+                completion_tokens=session_cost.total_completion_tokens if session_cost.total_completion_tokens > 0 else None,
+                created_at=datetime.now().isoformat(sep=" ", timespec="seconds"),
+            )
+            record_id = save_record(record)
+            log.info(f"Saved Excel extraction record #{record_id}")
+        except Exception as e:
+            log.error(f"Failed to save record: {e}")
+
+        yield f"data: {json.dumps({'type': 'done', 'record_id': record_id, 'total_cost': {'prompt_tokens': session_cost.total_prompt_tokens, 'completion_tokens': session_cost.total_completion_tokens, 'total_cost_usd': session_cost.total_cost_usd}})}\n\n"
+        log.info("Excel extraction complete!")
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache, no-transform", "Connection": "keep-alive"})
 
 @app.get("/extract")
 async def extract(request: Request):

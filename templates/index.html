@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF Product Extractor</title>
+    <title>PDF/Excel Product Extractor</title>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; }
@@ -63,19 +64,24 @@
         .history-item-meta span { display: inline-flex; align-items: center; gap: 3px; }
         .history-action-btn { background: #ff9800; color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: auto; white-space: nowrap; }
         .history-action-btn:hover { background: #e68900; }
+        .excel-preview { overflow: auto; flex: 1; padding: 0; max-height: 100%; }
+        .excel-preview table { border-collapse: collapse; font-size: 11px; table-layout: auto; }
+        .excel-preview th, .excel-preview td { padding: 3px 6px; border: 1px solid #ccc; text-align: left; white-space: normal; word-break: break-word; max-width: 200px; }
+        .excel-preview tr:nth-child(even) { background: #f9f9f9; }
+        .excel-preview tr:hover td { background: #e8f0fe; }
     </style>
 </head>
 <body>
-    <div class="header">📄 PDF Product Extractor</div>
+    <div class="header">📄 PDF/Excel Product Extractor</div>
     <div class="container">
         <div class="left-panel">
             <div class="upload-area">
-                <input type="file" id="fileInput" accept=".pdf" hidden>
-                <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📁 Upload PDF</button>
+                <input type="file" id="fileInput" accept=".pdf,.xlsx" hidden>
+                <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📁 Upload PDF/Excel</button>
                 <span class="file-info" id="fileInfo">Chưa có file nào</span>
             </div>
             <div class="pdf-viewer" id="pdfViewer">
-                <div class="placeholder">Upload file PDF để xem tại đây</div>
+                <div class="placeholder">Upload file PDF/Excel để xem tại đây</div>
             </div>
         </div>
         <div class="right-panel">
@@ -85,11 +91,11 @@
             </div>
             <div id="tabExtract" class="tab-content active">
                 <div class="extract-bar">
-                    <label>Từ trang:</label>
+                    <label id="lblStartPage">Từ trang:</label>
                     <input type="number" id="startPage" value="1" min="1">
-                    <label>Đến trang:</label>
+                    <label id="lblEndPage">Đến trang:</label>
                     <input type="number" id="endPage" value="10" min="1">
-                    <label>Batch:</label>
+                    <label id="lblBatch">Batch:</label>
                     <select id="batchSize">
                         <option value="5">5</option>
                         <option value="10" selected>10</option>
@@ -129,6 +135,7 @@
         const FIELDS = ["ma_san_pham", "ma_phu_kien", "ten_san_pham", "hinh_anh", "mo_ta_tinh_nang", "kich_thuoc", "thuong_hieu", "danh_muc", "don_vi", "thue_vat", "gia_niem_yet", "gia_mua_vao", "gia_ban_ra"];
         let currentFileId = null;
         let currentFilename = '';
+        let currentFileType = 'pdf';
         let currentRecordId = null;
         let allRows = []; // array of arrays (each row = array of cell values)
         let headers = [];
@@ -221,6 +228,31 @@
             return i ? i.value.trim() : '';
         }
 
+        function togglePageControls(fileType) {
+            if (fileType === 'xlsx') {
+                document.getElementById('lblStartPage').textContent = 'Từ hàng:';
+                document.getElementById('lblEndPage').textContent = 'Đến hàng:';
+            } else {
+                document.getElementById('lblStartPage').textContent = 'Từ trang:';
+                document.getElementById('lblEndPage').textContent = 'Đến trang:';
+            }
+        }
+
+        async function renderExcelPreview(fileId) {
+            const viewer = document.getElementById('pdfViewer');
+            try {
+                const resp = await fetch(`/xlsx/${fileId}`);
+                if (!resp.ok) throw new Error('Fetch failed');
+                const ab = await resp.arrayBuffer();
+                const wb = XLSX.read(ab, { type: 'array' });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                const html = XLSX.utils.sheet_to_html(ws, { editable: false });
+                viewer.innerHTML = '<div class="excel-preview">' + html + '</div>';
+            } catch (err) {
+                viewer.innerHTML = '<div class="placeholder">Không thể tải preview Excel</div>';
+            }
+        }
+
         loadModels();
 
         document.getElementById('fileInput').addEventListener('change', async (e) => {
@@ -233,22 +265,32 @@
             try {
                 const resp = await fetch('/upload', { method: 'POST', body: fd });
                 const data = await resp.json();
+                if (data.error) { info.textContent = 'Upload thất bại: ' + data.error; return; }
                 currentFileId = data.file_id;
                 currentFilename = data.filename;
-                totalPages = data.total_pages;
-                info.textContent = `${data.filename} — ${data.total_pages} trang`;
-                document.getElementById('endPage').value = data.total_pages;
-                document.getElementById('endPage').max = data.total_pages;
-                document.getElementById('startPage').max = data.total_pages;
+                currentFileType = data.file_type || 'pdf';
                 document.getElementById('extractBtn').disabled = false;
-                document.getElementById('pdfViewer').innerHTML = `<iframe src="${data.pdf_url}"></iframe>`;
+                togglePageControls(currentFileType);
+
+                if (currentFileType === 'xlsx') {
+                    info.textContent = `${data.filename} — ${data.row_count} dòng dữ liệu`;
+                    document.getElementById('endPage').value = data.row_count;
+                    document.getElementById('endPage').max = data.row_count;
+                    document.getElementById('startPage').max = data.row_count;
+                    renderExcelPreview(data.file_id);
+                } else {
+                    totalPages = data.total_pages;
+                    info.textContent = `${data.filename} — ${data.total_pages} trang`;
+                    document.getElementById('endPage').value = data.total_pages;
+                    document.getElementById('endPage').max = data.total_pages;
+                    document.getElementById('startPage').max = data.total_pages;
+                    document.getElementById('pdfViewer').innerHTML = `<iframe src="${data.pdf_url}"></iframe>`;
+                }
             } catch (err) { info.textContent = 'Upload thất bại: ' + err.message; }
         });
 
         function startExtract() {
             if (!currentFileId) return;
-            const startPage = parseInt(document.getElementById('startPage').value) - 1;
-            const endPage = parseInt(document.getElementById('endPage').value);
             const btn = document.getElementById('extractBtn');
             const stats = document.getElementById('stats');
             const progressArea = document.getElementById('progressArea');
@@ -267,15 +309,26 @@
             document.getElementById('progressFill').style.width = '0%';
             document.getElementById('progressText').textContent = 'Bắt đầu xử lý...';
 
-            const batchSize = parseInt(document.getElementById('batchSize').value) || 10;
-            const url = `/extract?file_id=${currentFileId}&start_page=${startPage}&end_page=${endPage}&batch_size=${batchSize}&model=${encodeURIComponent(getSelectedModel())}&filename=${encodeURIComponent(currentFilename)}`;
+            let url;
+            if (currentFileType === 'xlsx') {
+                const startRow = parseInt(document.getElementById('startPage').value);
+                const endRow = parseInt(document.getElementById('endPage').value);
+                const batchSize = parseInt(document.getElementById('batchSize').value) || 100;
+                url = `/extract-excel?file_id=${currentFileId}&start_row=${startRow}&end_row=${endRow}&batch_size=${batchSize}&model=${encodeURIComponent(getSelectedModel())}&filename=${encodeURIComponent(currentFilename)}`;
+            } else {
+                const startPage = parseInt(document.getElementById('startPage').value) - 1;
+                const endPage = parseInt(document.getElementById('endPage').value);
+                const batchSize = parseInt(document.getElementById('batchSize').value) || 10;
+                url = `/extract?file_id=${currentFileId}&start_page=${startPage}&end_page=${endPage}&batch_size=${batchSize}&model=${encodeURIComponent(getSelectedModel())}&filename=${encodeURIComponent(currentFilename)}`;
+            }
             const evtSource = new EventSource(url);
 
             evtSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'progress') {
                     document.getElementById('progressFill').style.width = Math.round((data.batch - 1) / data.total_batches * 100) + '%';
-                    document.getElementById('progressText').innerHTML = `<span class="spinner"></span> Batch ${data.batch}/${data.total_batches} — Trang ${data.pages}`;
+                    const detail = data.pages ? `Trang ${data.pages}` : `Mô tả ${data.descriptions}`;
+                    document.getElementById('progressText').innerHTML = `<span class="spinner"></span> Batch ${data.batch}/${data.total_batches} — ${detail}`;
                 }
                 else if (data.type === 'batch') {
                     if (!headers.length && data.headers.length) {
@@ -286,7 +339,9 @@
                     data.rows.forEach(row => {
                         allRows.push(row);
                         const tr = document.createElement('tr');
-                        tr.innerHTML = `<td>${allRows.length}</td>` + row.map((c, ci) => `<td contenteditable="true" data-row="${allRows.length-1}" data-col="${ci}">${escapeHtml(c)}</td>`).join('');
+                        // First cell is STT (from data or auto-increment)
+                        const stt = row[0] || allRows.length;
+                        tr.innerHTML = `<td>${stt}</td>` + row.slice(1).map((c, ci) => `<td contenteditable="true" data-row="${allRows.length-1}" data-col="${ci+1}">${escapeHtml(c)}</td>`).join('');
                         tbody.appendChild(tr);
                     });
                     if (data.cost) {
@@ -299,7 +354,8 @@
                     stats.textContent = `📊 ${allRows.length} sản phẩm đã trích xuất...`;
                 }
                 else if (data.type === 'error') {
-                    document.getElementById('progressText').innerHTML += `<div class="batch-error">⚠ Batch ${data.batch} (trang ${data.pages}): ${data.message}</div>`;
+                    const errorDetail = data.pages ? `trang ${data.pages}` : `batch ${data.batch}`;
+                    document.getElementById('progressText').innerHTML += `<div class="batch-error">⚠ Batch ${data.batch} (${errorDetail}): ${data.message}</div>`;
                 }
                 else if (data.type === 'done') {
                     evtSource.close();
