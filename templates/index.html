@@ -308,6 +308,7 @@
             progressArea.style.display = 'block';
             document.getElementById('progressFill').style.width = '0%';
             document.getElementById('progressText').textContent = 'Bắt đầu xử lý...';
+            const extractStartTime = Date.now();
 
             let url;
             if (currentFileType === 'xlsx') {
@@ -360,7 +361,7 @@
                 else if (data.type === 'done') {
                     evtSource.close();
                     document.getElementById('progressFill').style.width = '100%';
-                    document.getElementById('progressText').textContent = 'Hoàn tất!';
+                    document.getElementById('progressText').textContent = `Hoàn tất! (${((Date.now() - extractStartTime) / 1000).toFixed(1)}s)`;
                     if (data.total_cost) updateCostDisplay(data.total_cost.total_cost_usd, data.total_cost.prompt_tokens, data.total_cost.completion_tokens);
                     else if (!costKnown) showCostUnknown();
                     stats.textContent = `✅ ${allRows.length} sản phẩm đã trích xuất`;
